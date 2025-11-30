@@ -1,0 +1,8 @@
+{
+  "css.validate": false,
+  "css.lint.unknownAtRules": "ignore",
+  "scss.validate": false,
+  "less.validate": false,
+  "files.eol": "\n",
+  "files.encoding": "utf8"
+}
