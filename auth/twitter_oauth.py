@@ -6,7 +6,7 @@ import base64
 from config.settings import settings
 from typing import Dict, Optional
 from db.models import OAuthState
-from db.connection import get_session
+from db.connection import get_session_direct  # Change import
 from datetime import datetime, timedelta
 import logging
 
@@ -33,8 +33,9 @@ class TwitterOAuth:
     
     def _store_oauth_state(self, state: str, code_verifier: str):
         """Store OAuth state in database"""
+        session = None
         try:
-            session = get_session()
+            session = get_session_direct()  # Changed
             
             # Clean up old states (older than 10 minutes)
             old_threshold = datetime.utcnow() - timedelta(minutes=10)
@@ -49,19 +50,22 @@ class TwitterOAuth:
             )
             session.add(oauth_state)
             session.commit()
-            session.close()
             
             logger.info("OAuth state stored in database")
             
         except Exception as e:
             logger.error(f"Error storing OAuth state: {e}")
-            session.rollback()
-            session.close()
+            if session:
+                session.rollback()
+        finally:
+            if session:
+                session.close()
     
     def _get_oauth_state(self, state: str) -> Optional[str]:
         """Retrieve and delete OAuth state from database"""
+        session = None
         try:
-            session = get_session()
+            session = get_session_direct()  # Changed
             
             oauth_state = session.query(OAuthState).filter_by(state=state).first()
             
@@ -69,17 +73,17 @@ class TwitterOAuth:
                 code_verifier = oauth_state.code_verifier
                 session.delete(oauth_state)  # Delete after use
                 session.commit()
-                session.close()
                 logger.info("OAuth state retrieved and deleted")
                 return code_verifier
             
-            session.close()
             return None
             
         except Exception as e:
             logger.error(f"Error retrieving OAuth state: {e}")
-            session.close()
             return None
+        finally:
+            if session:
+                session.close()
     
     def get_authorization_url(self) -> str:
         """

@@ -5,7 +5,7 @@ from data.user_profiler import UserProfiler
 from ai.peer_matcher import PeerMatcher
 from ai.insights_generator import InsightsGenerator
 from db.models import User, UserProfile, PeerMatch, Analysis
-from db.connection import get_session
+from db.connection import get_session_direct
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,22 +30,16 @@ class AnalysisService:
     ) -> Dict:
         """
         Run complete analysis with smart caching
-        
-        Args:
-            user_id: UUID of user
-            force_refresh_profile: Skip cache, re-profile user
-            force_refresh_peers: Skip cache, find new peers
-        
-        Returns:
-            Complete analysis dict
         """
-        session = get_session()
+        session = get_session_direct()
         
         try:
             # Get user
             user = session.query(User).filter_by(id=user_id).first()
             if not user:
                 raise ValueError(f"User {user_id} not found")
+            
+            logger.info(f"✅ Starting analysis for @{user.x_handle}")
             
             # STEP 1: Get/Create User Profile
             user_profile_data = self._get_or_create_user_profile(
@@ -63,98 +57,74 @@ class AnalysisService:
             )
             
             # STEP 3: Generate Insights (always fresh)
+            logger.info("🔄 Generating insights...")
             analysis_data = self.insights.generate_insights(
                 user_profile_data,
                 peer_profiles,
                 num_insights=3
             )
             
-            # STEP 4: Save Analysis to Database
-            analysis = Analysis(
-                user_id=user_id,
-                user_profile_id=user_profile_data.get('db_id'),
-                growth_score=analysis_data.get('growth_score', 0),
-                insights=analysis_data.get('insights', []),
-                comparison_data=analysis_data.get('comparison_data', {})
+            # STEP 4: Save Analysis
+            analysis_record = self._save_analysis(
+                user_id,
+                user_profile_data,
+                peer_profiles,
+                analysis_data,
+                session
             )
-            session.add(analysis)
-            session.commit()
             
-            logger.info(f"✅ Full analysis complete for @{user.x_handle}")
-            
-            # Return everything
-            return {
+            # Build response
+            result = {
+                'analysis_id': str(analysis_record.id),
                 'user_profile': user_profile_data,
-                'peers': peer_profiles,
-                'analysis': analysis_data,
-                'analysis_id': str(analysis.id),
-                'created_at': analysis.created_at
+                'peer_profiles': peer_profiles,
+                'insights': analysis_data,
+                'created_at': analysis_record.created_at.isoformat(),
             }
             
+            logger.info(f"✅ Analysis complete for user {user_id}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}")
+            session.rollback()
+            raise
         finally:
             session.close()
     
-    def _get_or_create_user_profile(
-        self,
-        user: User,
-        session,
-        force_refresh: bool = False
-    ) -> Dict:
-        """
-        Get user profile from cache or create new one
-        """
-        # Check cache (6 hour TTL)
+    def _get_or_create_user_profile(self, user, session, force_refresh=False):
+        """Get cached profile or create new one"""
+        
+        # Check cache
         if not force_refresh:
-            cached = session.query(UserProfile).filter(
-                UserProfile.user_id == user.id,
-                UserProfile.expires_at > datetime.utcnow()
+            cached = session.query(UserProfile).filter_by(
+                user_id=user.id
             ).order_by(UserProfile.analyzed_at.desc()).first()
             
-            if cached:
-                logger.info(f"✅ Using cached profile for @{user.x_handle}")
-                # Reconstruct FULL profile from cached data
-                profile_data = {
+            if cached and cached.expires_at > datetime.utcnow():
+                logger.info(f"✅ Using cached profile (expires: {cached.expires_at})")
+                return {
+                    'db_id': str(cached.id),
                     'handle': user.x_handle,
-                    'user_id': str(user.x_user_id),
-                    'name': user.x_handle,
-                    'bio': '',
-                    'profile_image': '',
                     'basic_metrics': {
-                        'followers_count': cached.followers_count or 0,
-                        'following_count': cached.following_count or 0,
-                        'tweet_count': cached.tweet_count or 0,
-                        'listed_count': 0,
-                        'follower_following_ratio': 0
+                        'followers_count': cached.followers_count,
+                        'following_count': cached.following_count,
+                        'tweet_count': cached.tweet_count,
                     },
-                    'grok_profile': cached.grok_profile or {},
-                    'niche': cached.niche or 'other',
+                    'grok_profile': cached.grok_profile,
+                    'niche': cached.niche,
                     'content_style': cached.content_style or {},
-                    'posting_rhythm': {'posts_per_week': 0},
-                    'engagement_baseline': {'engagement_rate': cached.avg_engagement_rate or 0},
-                    'growth_velocity': {'estimated_30d_growth': cached.growth_30d or 0},
-                    'db_id': str(cached.id)
+                    'engagement_baseline': {
+                        'engagement_rate': cached.avg_engagement_rate,
+                    },
+                    'growth_velocity': {
+                        'estimated_30d_growth': cached.growth_30d,
+                    }
                 }
-                return profile_data
         
         # Create new profile
-        logger.info(f"🔄 Creating new profile for @{user.x_handle}")
-        
-        # Fetch from Twitter + Grok
-        from data.twitter_client import TwitterAPIClient
-        twitter = TwitterAPIClient(self.cost_tracker)
-        
-        user_data = twitter.get_user_by_handle(user.x_handle)
-        
-        # Smart tweet fetching
-        followers = user_data.get('public_metrics', {}).get('followers_count', 0)
-        needs_tweets = self.profiler._should_fetch_tweets(followers)
-        
-        if needs_tweets:
-            tweets = twitter.get_user_tweets(user.x_handle, max_results=40)
-        else:
-            tweets = None
-        
-        profile_data = self.profiler.analyze_user(user_data, tweets)
+        logger.info("🔄 Creating new user profile...")
+        profile_data = self.profiler.analyze_user_from_handle(user.x_handle)
         
         # Save to database
         user_profile = UserProfile(
@@ -179,16 +149,9 @@ class AnalysisService:
         
         return profile_data
     
-    def _get_or_create_peers(
-        self,
-        user: User,
-        user_profile_data: Dict,
-        session,
-        force_refresh: bool = False
-    ) -> list:
-        """
-        Get peer matches from cache or create new ones
-        """
+    def _get_or_create_peers(self, user, user_profile_data, session, force_refresh=False):
+        """Get cached peers or find new ones"""
+        
         # Check cache (24 hour TTL)
         if not force_refresh:
             cached = session.query(PeerMatch).filter(
@@ -198,15 +161,26 @@ class AnalysisService:
             
             if cached and len(cached) >= 5:
                 logger.info(f"✅ Using cached peers for @{user.x_handle}")
-                return [peer.peer_profile for peer in cached]
+                return [
+                    {
+                        'handle': peer.peer_handle,
+                        'basic_metrics': {
+                            'followers_count': peer.peer_followers,
+                        },
+                        'grok_profile': peer.peer_profile,
+                        'match_score': peer.match_score,
+                        'match_reason': peer.match_reason,
+                        'growth_edge': peer.growth_edge,
+                    }
+                    for peer in cached
+                ]
         
         # Find new peers
-        logger.info(f"🔄 Finding new peers for @{user.x_handle}")
-        
+        logger.info("🔄 Finding peer accounts...")
         peer_profiles = self.matcher.find_peers(
             user_profile_data,
             count=5,
-            save_to_db=False  # We'll save with our own logic
+            save_to_db=False
         )
         
         # Delete old peers
@@ -219,25 +193,29 @@ class AnalysisService:
                 peer_handle=peer['handle'],
                 peer_followers=peer['basic_metrics']['followers_count'],
                 peer_profile=peer['grok_profile'],
-                match_score=peer.get('match_score', 0),
+                match_score=peer.get('match_score', 85),
                 match_reason=peer.get('match_reason', ''),
                 growth_edge=peer.get('growth_edge', ''),
-                expires_at=datetime.utcnow() + timedelta(hours=24)  # 24 hour cache
+                expires_at=datetime.utcnow() + timedelta(hours=24)
             )
             session.add(peer_match)
         
         session.commit()
-        logger.info(f"✅ Peers saved with 24h cache")
+        logger.info(f"✅ Saved {len(peer_profiles)} peers with 24h cache")
         
         return peer_profiles
     
-    def force_refresh_peers_only(self, user_id: str) -> Dict:
-        """
-        Re-run peer matching without re-profiling user
-        (Ad-hoc use case you mentioned)
-        """
-        return self.run_full_analysis(
-            user_id,
-            force_refresh_profile=False,  # Keep cached profile
-            force_refresh_peers=True       # Get new peers
+    def _save_analysis(self, user_id, user_profile, peer_profiles, insights_data, session):
+        """Save analysis to database"""
+        
+        analysis = Analysis(
+            user_id=user_id,
+            insights_data=insights_data,
+            created_at=datetime.utcnow()
         )
+        session.add(analysis)
+        session.commit()
+        session.refresh(analysis)
+        
+        logger.info(f"✅ Analysis saved: {analysis.id}")
+        return analysis

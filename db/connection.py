@@ -1,43 +1,49 @@
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
+# db/connection.py
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
 from config.settings import settings
-from db.models import Base
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Create engine
+# Create engine with proper pool configuration
 engine = create_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,  # Log SQL queries in debug mode
-    pool_pre_ping=True,   # Verify connections before using
-    pool_size=5,
-    max_overflow=10
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=60,
+    pool_recycle=3600,
+    pool_pre_ping=True,
+    echo=False
 )
 
-# Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-
-def get_session() -> Session:
-    """Get database session"""
+def get_session():
+    """
+    Dependency for FastAPI endpoints
+    Ensures proper session cleanup
+    """
     session = SessionLocal()
     try:
-        return session
-    except Exception as e:
-        logger.error(f"Error creating session: {e}")
+        yield session
+    finally:
         session.close()
-        raise
 
+def get_session_direct():
+    """
+    Get session directly (not for FastAPI dependencies)
+    Used in TwitterOAuth and other non-endpoint code
+    IMPORTANT: Caller must close session manually
+    """
+    return SessionLocal()
 
 def init_db():
-    """Initialize database - create all tables"""
-    try:
-        Base.metadata.create_all(bind=engine)
-        logger.info("✅ Database tables created successfully")
-    except Exception as e:
-        logger.error(f"❌ Error creating database tables: {e}")
-        raise
+    """Initialize database tables"""
+    from db.models import User, UserProfile, Analysis, PeerMatch, OAuthState, TweetsCache, PeerPool
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database initialized")
 
 
 def test_connection():

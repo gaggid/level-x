@@ -1,20 +1,23 @@
-# C:\Python\levelx\main.py
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 from db.connection import get_session
-from db.models import User, UserProfile, Analysis
+from db.models import User, UserProfile, Analysis, PeerMatch  # ← Add PeerMatch here
 from services.analysis_service import AnalysisService
+from auth.twitter_oauth import TwitterOAuth
 from typing import Optional
 import logging
 from datetime import datetime
+import secrets
+import uuid
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LevelX API", version="1.0.0")
 
-# CORS for frontend
+# Add CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -26,12 +29,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Pydantic model for OAuth callback
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+
 # Helper: Get current user (for now, just get first user)
-def get_current_user_from_session(session: Session = Depends(get_session)):
-    user = session.query(User).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="No user found. Please authenticate first.")
-    return user
+def get_current_user_from_session(
+    authorization: Optional[str] = Header(None),
+    session: Session = Depends(get_session)
+):
+    """Get current user from session token"""
+    
+    if not authorization:
+        # For development: use first user if no auth header
+        user = session.query(User).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="No user found. Please authenticate.")
+        return user
+    
+    # Extract token
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    
+    token = authorization.replace("Bearer ", "")
+    
+    try:
+        user_id = token.split(":")[0]
+        user = session.query(User).filter_by(id=user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        return user
+    except Exception as e:
+        logger.error(f"Auth error: {e}")
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.get("/")
 def root():
@@ -90,7 +123,6 @@ def get_latest_analysis(
 ):
     """Get user's most recent analysis"""
     
-    # Fix: Use created_at instead of analyzed_at for Analysis
     analysis = (
         session.query(Analysis)
         .filter_by(user_id=user.id)
@@ -110,33 +142,57 @@ def get_latest_analysis(
         .first()
     )
     
-    # Build response from analysis data
+    if not profile:
+        logger.warning(f"No profile found for user {user.id}")
+        return None
+    
+    # Parse Grok profile data
+    grok_profile = profile.grok_profile or {}
+    
+    # Build response from REAL data only
     result = {
         "id": str(analysis.id),
         "analyzed_at": analysis.created_at.isoformat(),
         "user_profile": {
-            "avg_engagement_rate": profile.avg_engagement_rate if profile else 0.045,
-            "growth_30d": profile.growth_30d if profile else 8.5,
-            "posting_frequency_per_week": 12,
-            "viral_index": 65,
-            "content_quality_score": 80,
-            "niche_authority_score": 70,
-            "posting_consistency": 0.85,
+            "avg_engagement_rate": profile.avg_engagement_rate or 0,
+            "growth_30d": profile.growth_30d or 0,
+            "posting_frequency_per_week": grok_profile.get('posting_frequency_per_week', 0),
+            "viral_index": 0,
+            "content_quality_score": 0,
+            "niche_authority_score": 0,
+            "posting_consistency": grok_profile.get('posting_consistency', 0),
         },
         "peer_averages": {
-            "avg_engagement_rate": 0.052,
-            "growth_30d": 12.3,
-            "posting_frequency_per_week": 15,
-            "viral_index": 78,
-            "content_quality_score": 75,
-            "niche_authority_score": 80,
+            "avg_engagement_rate": 0,
+            "growth_30d": 0,
+            "posting_frequency_per_week": 0,
+            "viral_index": 0,
+            "content_quality_score": 0,
+            "niche_authority_score": 0,
         },
-        "peers": analysis.peer_profiles if hasattr(analysis, 'peer_profiles') else [],
-        "insights": analysis.insights if hasattr(analysis, 'insights') else [],
-        "score_change": 2.4,
-        "percentile": 68,
+        "peers": [],  # Empty for now - will be populated after running analysis
+        "insights": [],
+        "score_change": 0,
+        "percentile": 0,
         "credits_used": 15,
     }
+    
+    # Parse insights from analysis data
+    if hasattr(analysis, 'insights_data') and analysis.insights_data:
+        try:
+            insights_data = analysis.insights_data
+            if isinstance(insights_data, dict):
+                # Extract insights from different categories
+                all_insights = []
+                for category in ['posting_pattern', 'content_type', 'topic_strategy', 'structure_formatting']:
+                    if category in insights_data and isinstance(insights_data[category], dict):
+                        category_insights = insights_data[category].get('insights', [])
+                        if isinstance(category_insights, list):
+                            all_insights.extend(category_insights)
+                
+                result['insights'] = all_insights[:3]  # Top 3 insights
+        except Exception as e:
+            logger.error(f"Error parsing insights: {e}")
     
     logger.info(f"Returning latest analysis for user {user.id}")
     return result
@@ -176,7 +232,6 @@ def get_analysis_history(
 ):
     """Get user's analysis history"""
     
-    # Fix: Use created_at instead of analyzed_at
     analyses = (
         session.query(Analysis)
         .filter_by(user_id=user.id)
@@ -185,15 +240,40 @@ def get_analysis_history(
         .all()
     )
     
-    return [
-        {
+    result = []
+    for a in analyses:
+        # Get profile for this analysis to calculate X-Score
+        profile = (
+            session.query(UserProfile)
+            .filter_by(user_id=user.id)
+            .filter(UserProfile.analyzed_at <= a.created_at)
+            .order_by(UserProfile.analyzed_at.desc())
+            .first()
+        )
+        
+        # Calculate X-Score
+        x_score = 0
+        if profile:
+            grok_profile = profile.grok_profile or {}
+            engagement = profile.avg_engagement_rate or 0
+            growth = profile.growth_30d or 0
+            consistency = grok_profile.get('posting_consistency', 0)
+            
+            x_score = (
+                engagement * 100 * 0.3 +
+                growth * 0.4 +
+                consistency * 100 * 0.3
+            )
+            x_score = min(round(x_score * 10) / 10, 100)
+        
+        result.append({
             "id": str(a.id),
             "created_at": a.created_at.isoformat(),
-            "x_score": 84.5,  # TODO: Calculate from analysis data
+            "x_score": x_score,
             "credits_used": 15,
-        }
-        for a in analyses
-    ]
+        })
+    
+    return result
 
 @app.get("/api/analysis/{analysis_id}")
 def get_analysis_by_id(
@@ -219,32 +299,128 @@ def get_analysis_by_id(
         .first()
     )
     
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    grok_profile = profile.grok_profile or {}
+    
     return {
         "id": str(analysis.id),
         "analyzed_at": analysis.created_at.isoformat(),
         "user_profile": {
-            "avg_engagement_rate": profile.avg_engagement_rate if profile else 0,
-            "growth_30d": profile.growth_30d if profile else 0,
-            "posting_frequency_per_week": 12,
-            "viral_index": 65,
-            "content_quality_score": 80,
-            "niche_authority_score": 70,
-            "posting_consistency": 0.85,
+            "avg_engagement_rate": profile.avg_engagement_rate or 0,
+            "growth_30d": profile.growth_30d or 0,
+            "posting_frequency_per_week": grok_profile.get('posting_frequency_per_week', 0),
+            "viral_index": 0,
+            "content_quality_score": 0,
+            "niche_authority_score": 0,
+            "posting_consistency": grok_profile.get('posting_consistency', 0),
         },
         "peer_averages": {
-            "avg_engagement_rate": 0.052,
-            "growth_30d": 12.3,
-            "posting_frequency_per_week": 15,
-            "viral_index": 78,
-            "content_quality_score": 75,
-            "niche_authority_score": 80,
+            "avg_engagement_rate": 0,
+            "growth_30d": 0,
+            "posting_frequency_per_week": 0,
+            "viral_index": 0,
+            "content_quality_score": 0,
+            "niche_authority_score": 0,
         },
-        "peers": analysis.peer_profiles if hasattr(analysis, 'peer_profiles') else [],
-        "insights": analysis.insights if hasattr(analysis, 'insights') else [],
-        "score_change": 2.4,
-        "percentile": 68,
+        "peers": [],
+        "insights": [],
+        "score_change": 0,
+        "percentile": 0,
         "credits_used": 15,
     }
+
+# ============================================
+# OAUTH ENDPOINTS
+# ============================================
+
+@app.get("/api/auth/login")
+def oauth_login():
+    """Initiate OAuth flow - returns authorization URL"""
+    try:
+        oauth = TwitterOAuth()
+        auth_url = oauth.get_authorization_url()
+        return {"authorization_url": auth_url}
+    except Exception as e:
+        logger.error(f"OAuth init error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to initiate OAuth")
+
+
+@app.post("/api/auth/callback")
+def oauth_callback(
+    request: OAuthCallbackRequest,
+    session: Session = Depends(get_session)
+):
+    """Handle OAuth callback"""
+    try:
+        oauth = TwitterOAuth()
+        
+        # Exchange code for access token
+        token_data = oauth.get_access_token(request.code, request.state)
+        if not token_data:
+            raise HTTPException(status_code=400, detail="Failed to get access token")
+        
+        access_token = token_data.get('access_token')
+        refresh_token = token_data.get('refresh_token')
+        
+        # Get user info from X
+        user_info = oauth.get_user_info(access_token)
+        if not user_info:
+            raise HTTPException(status_code=400, detail="Failed to get user info")
+        
+        # Check if user exists
+        user = session.query(User).filter_by(x_user_id=user_info['id']).first()
+        
+        if user:
+            # Update existing user
+            user.x_handle = user_info['username']
+            user.oauth_token = access_token
+            user.oauth_token_secret = refresh_token
+            logger.info(f"Updated existing user: @{user_info['username']}")
+        else:
+            # Create new user
+            user = User(
+                id=uuid.uuid4(),
+                x_handle=user_info['username'],
+                x_user_id=user_info['id'],
+                oauth_token=access_token,
+                oauth_token_secret=refresh_token,
+                subscription_tier='free'
+            )
+            session.add(user)
+            logger.info(f"Created new user: @{user_info['username']}")
+        
+        session.commit()
+        session.refresh(user)
+        
+        # Generate session token
+        session_token = f"{user.id}:{secrets.token_urlsafe(32)}"
+        
+        return {
+            "success": True,
+            "token": session_token,
+            "user": {
+                "id": str(user.id),
+                "handle": f"@{user.x_handle}",
+                "x_user_id": user.x_user_id
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"OAuth callback error: {e}")
+        import traceback
+        traceback.print_exc()
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
+
+
+@app.post("/api/auth/logout")
+def logout():
+    """Logout user"""
+    return {"success": True, "message": "Logged out successfully"}
 
 # ============================================
 # DEVELOPMENT HELPERS

@@ -1,7 +1,7 @@
-// app/page.tsx
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   ArrowRight, 
   BarChart3, 
@@ -20,6 +20,83 @@ import Link from 'next/link';
 export default function Home() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('signup');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const router = useRouter();
+
+  // Check authentication on mount
+  useEffect(() => {
+    async function checkAuth() {
+      const token = localStorage.getItem('user_token');
+      
+      console.log('🔍 Checking auth...', { hasToken: !!token });
+      
+      if (!token) {
+        console.log('❌ No token found');
+        setIsCheckingAuth(false);
+        return;
+      }
+
+      try {
+        console.log('✅ Token found, validating...');
+        const response = await fetch('http://localhost:8000/api/user/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (response.ok) {
+          const user = await response.json();
+          console.log('✅ Valid token, redirecting to dashboard...', user);
+          router.push('/dashboard');
+          return;
+        } else {
+          console.log('❌ Invalid token, clearing...');
+          localStorage.clear();
+        }
+      } catch (error) {
+        console.error('❌ Auth check failed:', error);
+        localStorage.clear();
+      }
+      
+      setIsCheckingAuth(false);
+    }
+
+    checkAuth();
+  }, [router]);
+
+  async function handleXConnect() {
+    setIsAuthenticating(true);
+    
+    try {
+      const response = await fetch('http://localhost:8000/api/auth/login');
+      const data = await response.json();
+      
+      if (data.authorization_url) {
+        console.log('🔗 Redirecting to X OAuth...');
+        window.location.href = data.authorization_url;
+      } else {
+        alert('Failed to initiate login');
+        setIsAuthenticating(false);
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      alert('Failed to connect. Please try again.');
+      setIsAuthenticating(false);
+    }
+  }
+
+  // Show loading while checking
+  if (isCheckingAuth) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-[#0B0B0F]">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-white">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0B0B0F] text-white overflow-hidden">
@@ -259,6 +336,8 @@ export default function Home() {
           mode={authMode} 
           onClose={() => setShowAuthModal(false)}
           onSwitchMode={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}
+          onXConnect={handleXConnect}
+          isAuthenticating={isAuthenticating}
         />
       )}
     </div>
@@ -348,13 +427,26 @@ function PricingCard({
 }
 
 // Auth Modal Component
-function AuthModal({ mode, onClose, onSwitchMode }: { mode: 'login' | 'signup'; onClose: () => void; onSwitchMode: () => void }) {
+function AuthModal({ 
+  mode, 
+  onClose, 
+  onSwitchMode,
+  onXConnect,
+  isAuthenticating
+}: { 
+  mode: 'login' | 'signup'; 
+  onClose: () => void; 
+  onSwitchMode: () => void;
+  onXConnect: () => void;
+  isAuthenticating: boolean;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div className="relative w-full max-w-md bg-[#13131A] rounded-2xl border border-white/10 p-8">
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 text-slate-400 hover:text-white"
+          disabled={isAuthenticating}
         >
           <XIcon size={24} />
         </button>
@@ -362,14 +454,27 @@ function AuthModal({ mode, onClose, onSwitchMode }: { mode: 'login' | 'signup'; 
         <h2 className="text-3xl font-bold mb-2">{mode === 'login' ? 'Welcome Back' : 'Get Started Free'}</h2>
         <p className="text-slate-400 mb-8">{mode === 'login' ? 'Log in to continue growing' : 'Create your account in seconds'}</p>
 
-        <button className="w-full bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-100 transition-colors mb-6">
-          <XIcon size={20} />
-          Continue with X
+        <button 
+          onClick={onXConnect}
+          disabled={isAuthenticating}
+          className="w-full bg-white text-black py-3 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-slate-100 transition-colors mb-6 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {isAuthenticating ? (
+            <>
+              <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+              Connecting...
+            </>
+          ) : (
+            <>
+              <XIcon size={20} />
+              Continue with X
+            </>
+          )}
         </button>
 
         <div className="text-center text-sm text-slate-400">
           {mode === 'login' ? "Don't have an account? " : "Already have an account? "}
-          <button onClick={onSwitchMode} className="text-purple-400 hover:text-purple-300 font-medium">
+          <button onClick={onSwitchMode} className="text-purple-400 hover:text-purple-300 font-medium" disabled={isAuthenticating}>
             {mode === 'login' ? 'Sign up' : 'Log in'}
           </button>
         </div>
