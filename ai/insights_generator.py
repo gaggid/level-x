@@ -16,7 +16,7 @@ class InsightsGenerator:
     def __init__(self, cost_tracker=None):
         self.grok = GrokClient()
         self.cost_tracker = cost_tracker
-        logger.info("InsightsGenerator initialized with Grok AI")
+        logger.info("InsightsGenerator initialized with LevelX AI")
     
     def generate_insights(
         self,
@@ -131,232 +131,129 @@ class InsightsGenerator:
         peer_summaries: List[Dict],
         num_insights: int
     ) -> str:
-        """
-        Build comprehensive analysis prompt with strict guidelines
-        """
+        """Build comprehensive analysis prompt with detailed metrics"""
+        
+        # Calculate peer averages for comparison
+        avg_peer_posts = sum(p['posts_per_week'] for p in peer_summaries) / len(peer_summaries) if peer_summaries else 0
+        avg_peer_likes = sum(p['likes_per_post'] for p in peer_summaries) / len(peer_summaries) if peer_summaries else 0
+        avg_peer_views = sum(p['views_per_post'] for p in peer_summaries) / len(peer_summaries) if peer_summaries else 0
+        avg_peer_growth = sum(p['growth_rate'] for p in peer_summaries) / len(peer_summaries) if peer_summaries else 0
         
         # Format user data
+        user_posts = user_grok.get('posting_frequency_per_week', 0)
+        user_likes = user_grok.get('average_likes_per_post', 0)
+        user_views = user_grok.get('average_views_per_post', 0)
+        user_growth = user_grok.get('estimated_monthly_follower_growth_percent', 0)
+        
         user_data = f"""
-USER PROFILE: @{user_handle}
-Followers: {user_followers:,}
-Primary Niche: {user_grok.get('primary_niche', 'N/A')}
-Topics: {json.dumps(user_grok.get('secondary_topics', []))}
-Content Style: {user_grok.get('content_style', 'N/A')}
-Posts/Week: {user_grok.get('posting_frequency_per_week', 0)}
-Avg Likes: {user_grok.get('average_likes_per_post', 0)}
-Avg Views: {user_grok.get('average_views_per_post', 0)}
-Growth Rate: {user_grok.get('estimated_monthly_follower_growth_percent', 0)}% per month
-Visual Content: {user_grok.get('visual_content_ratio', 'medium')}
-Language: {user_grok.get('language_mix', 'N/A')}
-Hashtags Used: {json.dumps(user_grok.get('key_hashtags', []))}
-Strengths: {json.dumps(user_grok.get('strengths', []))}
-Weaknesses: {json.dumps(user_grok.get('weaknesses_for_growth', []))}
-"""
+    USER PROFILE: @{user_handle}
+    Followers: {user_followers:,}
+    Niche: {user_grok.get('primary_niche', 'N/A')}
+    Posts/Week: {user_posts} (Peers: {avg_peer_posts:.1f})
+    Avg Likes: {user_likes} (Peers: {avg_peer_likes:.0f})
+    Avg Views: {user_views} (Peers: {avg_peer_views:.0f})
+    Growth: {user_growth}%/month (Peers: {avg_peer_growth:.1f}%/month)
+    Visual Content: {user_grok.get('visual_content_ratio', 'medium')}
+    Content Style: {user_grok.get('content_style', 'N/A')}
+    """
         
         # Format peer data
         peers_data = ""
         for i, peer in enumerate(peer_summaries, 1):
             peers_data += f"""
-PEER {i}: @{peer['handle']} ({peer['followers']:,} followers)
-Niche: {peer['niche']}
-Topics: {json.dumps(peer['topics'])}
-Style: {peer['style']}
-Posts/Week: {peer['posts_per_week']}
-Likes: {peer['likes_per_post']} | Views: {peer['views_per_post']}
-Growth: {peer['growth_rate']}% per month
-Visual Content: {peer['visual_ratio']}
-Hashtags: {json.dumps(peer['hashtags'][:5])}
-Strengths: {json.dumps(peer['strengths'])}
-"""
+    PEER {i}: @{peer['handle']} ({peer['followers']:,} followers)
+    Posts/Week: {peer['posts_per_week']} | Likes: {peer['likes_per_post']} | Growth: {peer['growth_rate']}%/month
+    Style: {peer['style']}
+    Visual: {peer['visual_ratio']}
+    """
         
-        # Main analysis prompt
-        prompt = f"""You are an expert X/Twitter growth analyst. Perform a DEEP COMPARATIVE ANALYSIS between the user and their successful peers.
+        prompt = f"""You are an expert X/Twitter growth analyst. Generate 5-8 SPECIFIC, actionable insights with NUMBERS.
 
-{user_data}
+    {user_data}
 
-SUCCESSFUL PEERS (Growing Faster):
-{peers_data}
+    TOP PEERS (Growing Faster):
+    {peers_data}
 
-ANALYSIS REQUIREMENTS:
+    Analyze the gaps and generate insights covering:
+    1. Posting frequency and timing
+    2. Visual content usage (images, charts, videos)
+    3. Content format (threads vs single tweets)
+    4. Engagement tactics (questions, CTAs, hooks)
+    5. Topic strategy and trending participation
+    6. Hashtag and formatting patterns
 
-1. POSTING PATTERNS ANALYSIS
-   - Compare posting frequency (exact numbers)
-   - Identify optimal posting times/days (if patterns visible)
-   - Analyze consistency vs sporadic posting
-   - Compare response to trending topics
+    Return ONLY valid JSON (no markdown):
 
-2. CONTENT TYPE & STRUCTURE ANALYSIS
-   - Single tweets vs threads (which performs better for peers?)
-   - Media usage: images, videos, charts, infographics
-   - Link sharing patterns and frequency
-   - Question-based engagement tactics
-   - Poll usage and effectiveness
-   - Tweet length patterns (short punchy vs long-form)
-
-3. NICHE & TOPIC DISTRIBUTION
-   - What % of content goes to which topics (estimate based on secondary_topics)
-   - Topic diversification vs specialization
-   - Trending topic participation
-   - Educational vs entertainment vs promotional content mix
-
-4. TWEET STRUCTURE & FORMATTING
-   - Use of emojis and their placement
-   - Hashtag strategy (quantity, placement, types)
-   - Thread hooks and storytelling structure
-   - Call-to-action patterns
-   - Personal stories vs data/facts ratio
-   - Bullet points, numbered lists, formatting tricks
-
-5. UNIQUE CHARACTERISTICS
-   - What makes each peer stand out?
-   - Signature styles or formats
-   - Engagement tactics (replying, quote tweeting, etc.)
-   - Community building approaches
-
-STRICT OUTPUT FORMAT (return ONLY valid JSON, no markdown):
-
-{{
-  "growth_score": 6.5,
-  "growth_score_explanation": "Your 3% monthly growth trails peers' 12-15% average. You're in the bottom 30th percentile of your cohort.",
-  
-  "posting_analysis": {{
-    "user_pattern": {{
-      "posts_per_week": 7,
-      "consistency": "low",
-      "description": "Posts sporadically, 2-3 times some days then silent for 2-3 days"
-    }},
-    "peer_pattern": {{
-      "posts_per_week": 18,
-      "consistency": "high",
-      "description": "Posts 2-3 times daily at consistent times (9 AM, 2 PM, 7 PM EST)"
-    }},
-    "gap": "You post 61% less frequently than successful peers",
-    "impact": "Low posting frequency means algorithm doesn't prioritize your content and followers forget about you between posts"
-  }},
-  
-  "content_analysis": {{
-    "user_style": {{
-      "thread_usage": "10%",
-      "media_usage": "40%",
-      "link_frequency": "high (75% of posts)",
-      "tweet_length": "medium (150 chars avg)",
-      "unique_traits": ["uses links heavily", "minimal visual content"]
-    }},
-    "peer_style": {{
-      "thread_usage": "25%",
-      "media_usage": "70%",
-      "link_frequency": "low (20% of posts)",
-      "tweet_length": "varied (50-280 chars)",
-      "unique_traits": ["heavy infographic use", "daily charts", "storytelling threads"]
-    }},
-    "gap": "You use 43% less visual content and 3.75x more external links than peers",
-    "impact": "Link-heavy posts get deprioritized by X algorithm. Visual content gets 3x more engagement."
-  }},
-  
-  "topic_analysis": {{
-    "user_distribution": {{
-      "primary_focus": "70%",
-      "secondary_topics": "30%",
-      "trending_participation": "low"
-    }},
-    "peer_distribution": {{
-      "primary_focus": "60%",
-      "secondary_topics": "30%",
-      "trending_participation": "high (10%)"
-    }},
-    "gap": "You focus too narrowly on primary niche; peers diversify with trending topics",
-    "impact": "Trending topic participation can 10x reach but you're missing these opportunities"
-  }},
-  
-  "structure_analysis": {{
-    "user_formatting": {{
-      "emoji_usage": "minimal",
-      "hashtag_strategy": "few hashtags, generic",
-      "thread_hooks": "weak or none",
-      "cta_presence": "rare"
-    }},
-    "peer_formatting": {{
-      "emoji_usage": "strategic (for visual breaks and emphasis)",
-      "hashtag_strategy": "3-5 niche-specific hashtags per post",
-      "thread_hooks": "strong curiosity gaps, numbers, promises",
-      "cta_presence": "most posts end with question or action prompt"
-    }},
-    "gap": "Your posts lack engagement hooks and clear CTAs that peers use effectively",
-    "impact": "Without hooks and CTAs, engagement rates drop 50-70%"
-  }},
-  
-  "insights": [
     {{
-      "title": "Triple Your Posting Frequency",
-      "category": "posting_pattern",
-      "priority": "critical",
-      "current_state": "You post 7x per week with sporadic timing",
-      "peer_state": "Successful peers post 18x per week at consistent times",
-      "gap_impact": "You're reaching 61% fewer people. Algorithm deprioritizes inconsistent accounts.",
-      "action": "Post 15x per week minimum: 2-3 posts daily at 9 AM, 2 PM, 7 PM EST. Batch-create content on Sundays.",
-      "expected_result": "30-50% increase in reach within 30 days",
-      "measurement": "Track weekly impressions and engagement rate"
-    }},
-    {{
-      "title": "Shift to Visual-First Content",
-      "category": "content_type",
-      "priority": "high",
-      "current_state": "Only 40% of posts include media; 75% include external links",
-      "peer_state": "Peers use media in 70% of posts and links in only 20%",
-      "gap_impact": "Link-heavy posts get 50-70% less reach. You're leaving 3x engagement on the table.",
-      "action": "Create/add charts, infographics, or images to 65% of posts. Reduce link posts to 25%. Put links in first reply instead.",
-      "expected_result": "2-3x engagement boost on visual posts",
-      "measurement": "Compare engagement rate on visual vs text-only posts"
-    }},
-    {{
-      "title": "Ride Trending Topics Weekly",
-      "category": "topic_strategy",
-      "priority": "medium",
-      "current_state": "You focus 70% on core niche, ignore trending topics",
-      "peer_state": "Peers allocate 10% of posts to trending topics in their niche",
-      "gap_impact": "Missing 10x reach opportunities when topics trend",
-      "action": "Every Monday, identify 2-3 trending topics in your niche. Create 2-3 posts connecting trends to your expertise.",
-      "expected_result": "1-2 viral posts per month reaching 10x normal audience",
-      "measurement": "Track posts that exceed 3x your average views"
+      "growth_score": {user_growth},
+      "growth_score_explanation": "You're posting {user_posts}x/week vs peers' {avg_peer_posts:.0f}x/week. Your {user_growth}% monthly growth trails peers' {avg_peer_growth:.1f}%.",
+      
+      "insights": [
+        {{
+          "title": "Increase Posting to 3x Per Day",
+          "category": "posting_frequency",
+          "priority": "critical",
+          "current_state": "You post {user_posts}x/week ({user_posts/7:.1f}/day), getting {user_likes} avg likes",
+          "peer_state": "Top peers post {avg_peer_posts:.1f}x/week ({avg_peer_posts/7:.1f}/day), getting {avg_peer_likes:.0f} avg likes",
+          "gap_impact": "Posting {((avg_peer_posts - user_posts) / user_posts * 100):.0f}% less means {((avg_peer_posts - user_posts) / user_posts * 100):.0f}% fewer growth opportunities",
+          "action": "Post at 9 AM, 2 PM, and 7 PM EST. Batch-create content on Sundays. Track engagement patterns for 2 weeks.",
+          "expected_result": "Reach {int(avg_peer_likes / user_likes * 100 - 100) if user_likes > 0 else 100}% more people, gain ~{int((avg_peer_growth - user_growth) / 100 * user_followers)} followers/month",
+          "measurement": "Compare next 20 posts to your current {user_likes} avg likes",
+          "metrics": {{
+            "current_value": {user_posts},
+            "target_value": {avg_peer_posts:.1f},
+            "gap_percentage": {((avg_peer_posts - user_posts) / user_posts * 100) if user_posts > 0 else 100:.0f},
+            "potential_gain_followers": {int((avg_peer_growth - user_growth) / 100 * user_followers)}
+          }}
+        }},
+        {{
+          "title": "Add Visual Content to 70% of Posts",
+          "category": "visual_content",
+          "priority": "high",
+          "current_state": "Your visual content ratio is {user_grok.get('visual_content_ratio', 'low')}",
+          "peer_state": "Peers use high visual content (images, charts, infographics) in 70%+ of posts",
+          "gap_impact": "Visual posts get 3-4x more engagement on X. You're leaving engagement on the table.",
+          "action": "Next 10 posts: Add 1 relevant image/chart/screenshot. Use Canva for quick graphics. Post progress charts weekly.",
+          "expected_result": "Boost engagement 2-3x on visual posts vs text-only",
+          "measurement": "Track engagement rate: visual posts vs text-only posts",
+          "metrics": {{
+            "current_visual_pct": 30,
+            "target_visual_pct": 70,
+            "expected_engagement_boost": 200,
+            "potential_reach_increase": 150
+          }}
+        }}
+      ],
+      
+      "quick_wins": [
+        "Tomorrow: Post at 9 AM, 2 PM, 7 PM (test peer timing)",
+        "This week: Add images to your next 5 posts",
+        "Next post: End with a question (boosts replies 3x)"
+      ],
+      
+      "peer_standout_tactics": [
+        "@{peer_summaries[0]['handle'] if peer_summaries else 'peer1'}: Posts {peer_summaries[0]['posts_per_week'] if peer_summaries else 20}x/week with {peer_summaries[0]['visual_ratio'] if peer_summaries else 'high'} visual content"
+      ]
     }}
-  ],
-  
-  "quick_wins": [
-    "Add an image or chart to your next 5 posts",
-    "Post at 9 AM and 7 PM EST tomorrow (test optimal times)",
-    "End your next 3 posts with a question to boost replies"
-  ],
-  
-  "peer_standout_tactics": [
-    "@peer1 posts daily market charts at 9 AM - creates anticipation and routine",
-    "@peer2 shares personal failure stories in threads - builds authentic connection",
-    "@peer3 uses numbered lists and emojis for visual appeal and scannability"
-  ]
-}}
 
-CRITICAL RULES:
-- Use EXACT numbers from the data provided
-- Be specific, not generic ("post 15x per week" not "post more often")
-- Compare apples to apples (same metrics for user and peers)
-- Focus on ACTIONABLE differences, not just observations
-- Growth score must be 0-10 based on comparison with peers
-- Every insight needs: current state, peer state, gap, action, expected result
-- Return ONLY valid JSON, no markdown formatting, no extra text
-
-Generate the analysis now:"""
+    CRITICAL RULES:
+    - Use EXACT numbers from data
+    - Every insight needs metrics object with numbers
+    - Calculate gap_percentage and potential gains
+    - Be specific: "Post 3x/day" not "post more"
+    - Focus on TOP 5-8 highest-impact changes
+    """
         
         return prompt
     
     def _validate_response(self, response: Dict) -> bool:
         """
         Validate that Grok returned proper structure
+        Focus on essential fields only
         """
+        # Only require the essential fields
         required_keys = [
             'growth_score',
-            'posting_analysis',
-            'content_analysis',
-            'topic_analysis',
-            'structure_analysis',
             'insights'
         ]
         
@@ -368,9 +265,17 @@ Generate the analysis now:"""
         # Validate insights structure
         insights = response.get('insights', [])
         if not isinstance(insights, list) or len(insights) == 0:
-            logger.error("Invalid insights structure")
+            logger.error("Invalid insights structure - must be non-empty array")
             return False
         
+        # Check that each insight has required fields
+        for i, insight in enumerate(insights):
+            required_insight_fields = ['title', 'action']
+            for field in required_insight_fields:
+                if field not in insight:
+                    logger.warning(f"Insight {i} missing field: {field}")
+        
+        logger.info(f"✅ Response validation passed with {len(insights)} insights")
         return True
 
 

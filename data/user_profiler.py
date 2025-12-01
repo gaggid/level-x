@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 import logging
 from ai.grok_client import GrokClient, GrokAPIError
+from data.twitter_client import TwitterAPIClient, TwitterAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,53 @@ class UserProfiler:
             logger.info("UserProfiler initialized with Grok AI")
         except Exception as e:
             logger.error(f"Could not initialize Grok client: {e}")
+            raise
+    
+    # Add this method to the UserProfiler class
+    def analyze_user_from_handle(self, handle: str) -> Dict:
+        """
+        Analyze user by X handle (fetches data automatically)
+        
+        Args:
+            handle: X handle (with or without @)
+        
+        Returns:
+            Dict with complete user profile analysis
+        """
+        handle = handle.lstrip('@')
+        logger.info(f"Starting analysis for @{handle}")
+        
+        try:
+            # Initialize Twitter client
+            twitter_client = TwitterAPIClient(cost_tracker=self.cost_tracker)
+            
+            # Fetch user data
+            logger.info(f"Fetching user data for @{handle}")
+            user_data = twitter_client.get_user_by_handle(handle)
+            
+            if not user_data:
+                raise ValueError(f"Could not fetch data for @{handle}")
+            
+            # Check if we need tweets
+            followers = user_data.get('public_metrics', {}).get('followers_count', 0)
+            needs_tweets = self._should_fetch_tweets(followers)
+            
+            tweets = None
+            if needs_tweets:
+                logger.info(f"Fetching tweets for @{handle} (small account analysis)")
+                tweets = twitter_client.get_user_tweets(handle, max_results=40)
+                
+                if not tweets or len(tweets) < 5:
+                    logger.warning(f"Only found {len(tweets) if tweets else 0} tweets for @{handle}")
+            
+            # Analyze with existing method
+            return self.analyze_user(user_data, tweets)
+            
+        except TwitterAPIError as e:
+            logger.error(f"Twitter API error for @{handle}: {e}")
+            raise ValueError(f"Failed to fetch X data for @{handle}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Analysis failed for @{handle}: {e}")
             raise
     
     def analyze_user(

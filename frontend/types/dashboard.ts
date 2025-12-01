@@ -21,10 +21,36 @@ export interface PeerAccount {
   name: string;
   handle: string;
   avatar: string;
+  avatar_url?: string | null;
   score: number;
   trend: string;
   followers_count: number;
   growth_rate: number;
+  peer_insights?: {
+    unique_characteristics: string[];
+    what_they_do_differently: Array<{
+      category: string;
+      user_approach: string;
+      peer_approach: string;
+      impact: string;
+      example?: string;
+    }>;
+    tactical_insights: Array<{
+      tactic: string;
+      how_they_do_it: string;
+      why_it_works: string;
+      how_to_copy: string;
+      expected_result: string;
+    }>;
+    example_tweets?: Array<{
+      text: string;
+      public_metrics: {
+        like_count: number;
+        retweet_count: number;
+        reply_count?: number;
+      };
+    }>;
+  };
 }
 
 export interface Insight {

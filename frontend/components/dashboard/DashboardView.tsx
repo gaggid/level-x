@@ -11,7 +11,7 @@ import {
   ChevronRight,
   ArrowUp,
   ChevronDown,
-  Clock  // ← Add this
+  Clock
 } from 'lucide-react';
 import { 
   RadarChart, 
@@ -28,18 +28,40 @@ import { api } from '@/lib/api';
 import { transformBackendAnalysis } from '@/lib/transformers';
 import type { UserData, AnalysisResult, AnalysisHistoryItem, PeerAccount, Insight } from '@/types/dashboard';
 import { formatDate } from '@/lib/transformers';
+import { DetailedPeerCard } from './DetailedPeerCard';  // ADD THIS LINE
 
 // Peer Account Card Component
 function PeerCard({ peer }: { peer: PeerAccount }) {
   const sparklineData = Array.from({ length: 7 }, (_, i) => ({
     v: Math.random() * 100 + 50
   }));
+  
+  // Extract handle without @
+  const cleanHandle = peer.handle.replace('@', '');
 
   return (
-    <div className="bg-[#1A1A24] border border-white/5 rounded-xl p-4 hover:border-purple-500/30 transition-all">
+    <a 
+      href={`https://x.com/${cleanHandle}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block bg-[#1A1A24] border border-white/5 rounded-xl p-4 hover:border-purple-500/30 transition-all hover:scale-[1.02] cursor-pointer"
+    >
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-sm font-bold">
+          {peer.avatar_url ? (
+            <img 
+              src={peer.avatar_url} 
+              alt={peer.name}
+              className="w-10 h-10 rounded-full object-cover"
+              onError={(e) => {
+                // Fallback to initials if image fails to load
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                target.nextElementSibling?.classList.remove('hidden');
+              }}
+            />
+          ) : null}
+          <div className={peer.avatar_url ? 'hidden' : 'w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-sm font-bold'}>
             {peer.avatar}
           </div>
           <div>
@@ -76,7 +98,7 @@ function PeerCard({ peer }: { peer: PeerAccount }) {
           </ResponsiveContainer>
         </div>
       </div>
-    </div>
+    </a>
   );
 }
 
@@ -386,111 +408,113 @@ export default function DashboardView() {
               </div>
             </div>
 
-            <div className="grid lg:grid-cols-3 gap-8">
-              {/* Performance Matrix */}
-              <div className="lg:col-span-2 bg-[#13131A] border border-white/5 rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h2 className="text-2xl font-bold flex items-center gap-2">
-                      <TrendingUp className="text-purple-400" />
-                      Performance Matrix
-                    </h2>
-                    <p className="text-slate-400 text-sm">See where you shine and where to improve</p>
-                  </div>
-                  <div className="flex gap-4 text-xs">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-purple-500"></div>
-                      <span className="text-slate-400">You</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-slate-600"></div>
-                      <span className="text-slate-400">Top Peers</span>
-                    </div>
-                  </div>
+            {/* Performance Matrix - FULL WIDTH */}
+            <div className="bg-[#13131A] border border-white/5 rounded-2xl p-6 mb-8">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold flex items-center gap-2">
+                    <TrendingUp className="text-purple-400" />
+                    Performance Matrix
+                  </h2>
+                  <p className="text-slate-400 text-sm">See where you shine and where to improve</p>
                 </div>
-
-                <div className="h-[400px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RadarChart data={latestAnalysis.performance_metrics}>
-                      <PolarGrid stroke="#2A2A35" strokeWidth={1.5} />
-                      <PolarAngleAxis 
-                        dataKey="metric" 
-                        tick={{ fill: '#94a3b8', fontSize: 13, fontWeight: 600 }}
-                      />
-                      <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                      <Radar
-                        name="You"
-                        dataKey="you"
-                        stroke="#8b5cf6"
-                        strokeWidth={3}
-                        fill="#8b5cf6"
-                        fillOpacity={0.3}
-                      />
-                      <Radar
-                        name="Peers"
-                        dataKey="peers"
-                        stroke="#475569"
-                        strokeWidth={2}
-                        fill="#475569"
-                        fillOpacity={0.1}
-                        strokeDasharray="5 5"
-                      />
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: '#13131A', 
-                          borderColor: '#2A2A35', 
-                          borderRadius: '12px',
-                          border: '1px solid rgba(139, 92, 246, 0.2)'
-                        }}
-                        itemStyle={{ color: '#e2e8f0', fontWeight: 600 }}
-                      />
-                    </RadarChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-white/5">
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-emerald-400">
-                      {latestAnalysis.performance_metrics.filter(m => m.you > m.peers).length}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">Strengths</div>
+                <div className="flex gap-4 text-xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-purple-500"></div>
+                    <span className="text-slate-400">You</span>
                   </div>
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-amber-400">
-                      {latestAnalysis.performance_metrics.filter(m => Math.abs(m.you - m.peers) < 10).length}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">On Track</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-2xl font-bold text-red-400">
-                      {latestAnalysis.performance_metrics.filter(m => m.you < m.peers - 10).length}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">Needs Work</div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full bg-slate-600"></div>
+                    <span className="text-slate-400">Top Peers</span>
                   </div>
                 </div>
               </div>
 
-              {/* Top Peers */}
-              <div className="bg-[#13131A] border border-white/5 rounded-2xl p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div>
-                    <h2 className="text-xl font-bold flex items-center gap-2">
-                      <Users className="text-indigo-400" />
-                      Top Peers
-                    </h2>
-                    <p className="text-slate-400 text-xs">Accounts crushing it at your level</p>
-                  </div>
-                  <button className="text-purple-400 text-sm hover:text-purple-300 transition-colors flex items-center gap-1">
-                    Unlock 50+ More Peers
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
+              <div className="h-[400px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <RadarChart data={latestAnalysis.performance_metrics}>
+                    <PolarGrid stroke="#2A2A35" strokeWidth={1.5} />
+                    <PolarAngleAxis 
+                      dataKey="metric" 
+                      tick={{ fill: '#94a3b8', fontSize: 13, fontWeight: 600 }}
+                    />
+                    <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                    <Radar
+                      name="You"
+                      dataKey="you"
+                      stroke="#8b5cf6"
+                      strokeWidth={3}
+                      fill="#8b5cf6"
+                      fillOpacity={0.3}
+                    />
+                    <Radar
+                      name="Peers"
+                      dataKey="peers"
+                      stroke="#475569"
+                      strokeWidth={2}
+                      fill="#475569"
+                      fillOpacity={0.1}
+                      strokeDasharray="5 5"
+                    />
+                    <Tooltip 
+                      contentStyle={{ 
+                        backgroundColor: '#13131A', 
+                        borderColor: '#2A2A35', 
+                        borderRadius: '12px',
+                        border: '1px solid rgba(139, 92, 246, 0.2)'
+                      }}
+                      itemStyle={{ color: '#e2e8f0', fontWeight: 600 }}
+                    />
+                  </RadarChart>
+                </ResponsiveContainer>
+              </div>
 
-                <div className="space-y-3">
-                  {latestAnalysis.top_peers.slice(0, 4).map((peer) => (
-                    <PeerCard key={peer.id} peer={peer} />
-                  ))}
+              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-white/5">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-400">
+                    {latestAnalysis.performance_metrics.filter(m => m.you > m.peers).length}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">Strengths</div>
                 </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-amber-400">
+                    {latestAnalysis.performance_metrics.filter(m => Math.abs(m.you - m.peers) < 10).length}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">On Track</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-red-400">
+                    {latestAnalysis.performance_metrics.filter(m => m.you < m.peers - 10).length}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">Needs Work</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Top Peers - Deep Analysis */}
+            <div className="mb-8">
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold flex items-center gap-2 mb-2">
+                  <Users className="text-indigo-400" />
+                  Top Peers - Deep Analysis
+                </h2>
+                <p className="text-slate-400">
+                  Learn exactly what makes these accounts successful and how to copy their tactics
+                </p>
+              </div>
+              
+              <div className="space-y-6">
+                {latestAnalysis.top_peers && latestAnalysis.top_peers.length > 0 ? (
+                  latestAnalysis.top_peers.map((peer) => (
+                    <DetailedPeerCard key={peer.id} peer={peer} />
+                  ))
+                ) : (
+                  <div className="bg-[#1A1A24] border border-white/5 rounded-xl p-8 text-center">
+                    <Users className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+                    <p className="text-slate-400 mb-2">No peer data available</p>
+                    <p className="text-slate-500 text-sm">Peer insights will appear after running a new analysis</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -556,30 +580,33 @@ export default function DashboardView() {
                 <p className="text-slate-500 text-center py-8">No analysis history yet. Run your first analysis!</p>
               )}
             </div>
-
-            {/* Run New Analysis Button */}
-            <div className="text-center mt-8">
-              <button 
-                onClick={handleStartAnalysis}
-                disabled={isAnalyzing}
-                className="bg-purple-600 hover:bg-purple-700 px-8 py-4 rounded-xl font-bold text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-purple-500/30"
-              >
-                {isAnalyzing ? (
-                  <span className="flex items-center gap-2">
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Analyzing...
-                  </span>
-                ) : (
-                  '🔄 Run New Analysis'
-                )}
-              </button>
-              {isAnalyzing && (
-                <p className="text-slate-500 text-sm mt-4">This usually takes 15-30 seconds...</p>
-              )}
-            </div>
           </>
         )}
       </div>
+
+      {/* Floating Run Analysis Button */}
+      {hasRunAnalysis && (
+        <div className="fixed bottom-8 right-8 z-50">
+          <button 
+            onClick={handleStartAnalysis}
+            disabled={isAnalyzing}
+            className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 px-6 py-4 rounded-full font-bold text-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-2xl shadow-purple-500/50 hover:scale-110 flex items-center gap-2"
+            title="Run new analysis"
+          >
+            {isAnalyzing ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                Analyzing...
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-5 h-5" />
+                Run Analysis
+              </>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -70,8 +70,6 @@ class PeerMatch(Base):
     # Peer info
     peer_handle = Column(String(15), nullable=False)
     peer_followers = Column(Integer)
-    
-    # NEW: Full peer profile as JSON
     peer_profile = Column(JSON)
     
     # Match data
@@ -79,9 +77,13 @@ class PeerMatch(Base):
     match_reason = Column(Text)
     growth_edge = Column(Text)
     
+    # 🔥 NEW: Individual peer insights
+    peer_insights = Column(JSON)  # Add this line
+    example_tweets = Column(JSON)  # Add this line
+    
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    expires_at = Column(DateTime)  # Cache TTL
+    expires_at = Column(DateTime)
     
     # Relationship
     user = relationship("User", back_populates="peer_matches")

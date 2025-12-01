@@ -142,18 +142,32 @@ def get_latest_analysis(
         .first()
     )
     
+    # Get ONLY the most recent batch of peers (same timestamp as analysis)
+    peers = (
+        session.query(PeerMatch)
+        .filter(
+            PeerMatch.user_id == user.id,
+            PeerMatch.created_at >= analysis.created_at - timedelta(minutes=5)  # Within 5 min of analysis
+        )
+        .order_by(PeerMatch.match_score.desc())
+        .limit(5)
+        .all()
+    )
+    
+    logger.info(f"Found {len(peers)} peers from latest analysis batch")
+    
     if not profile:
         logger.warning(f"No profile found for user {user.id}")
         return None
     
-    # Parse Grok profile data
     grok_profile = profile.grok_profile or {}
     
-    # Build response from REAL data only
+    # 🔥 FIX: Build proper response with peers
     result = {
-        "id": str(analysis.id),
-        "analyzed_at": analysis.created_at.isoformat(),
+        "analysis_id": str(analysis.id),
+        "created_at": analysis.created_at.isoformat(),
         "user_profile": {
+            "handle": user.x_handle,
             "avg_engagement_rate": profile.avg_engagement_rate or 0,
             "growth_30d": profile.growth_30d or 0,
             "posting_frequency_per_week": grok_profile.get('posting_frequency_per_week', 0),
@@ -162,39 +176,29 @@ def get_latest_analysis(
             "niche_authority_score": 0,
             "posting_consistency": grok_profile.get('posting_consistency', 0),
         },
-        "peer_averages": {
-            "avg_engagement_rate": 0,
-            "growth_30d": 0,
-            "posting_frequency_per_week": 0,
-            "viral_index": 0,
-            "content_quality_score": 0,
-            "niche_authority_score": 0,
-        },
-        "peers": [],  # Empty for now - will be populated after running analysis
-        "insights": [],
-        "score_change": 0,
+        # 🔥 FIX: Add peer_profiles with actual data
+        "peer_profiles": [
+            {
+                "handle": peer.peer_handle,
+                "name": peer.peer_profile.get('name', peer.peer_handle.replace('@', '')) if peer.peer_profile else peer.peer_handle.replace('@', ''),
+                "profile_image": peer.peer_profile.get('profile_image') if peer.peer_profile else None,
+                "basic_metrics": {
+                    "followers_count": peer.peer_followers,
+                },
+                "grok_profile": peer.peer_profile,
+                "match_score": peer.match_score,
+                "match_reason": peer.match_reason,
+                "growth_edge": peer.growth_edge,
+            }
+            for peer in peers
+        ],
+        "insights": analysis.insights if hasattr(analysis, 'insights') and analysis.insights else [],
+        "growth_score": analysis.growth_score or 0,
         "percentile": 0,
         "credits_used": 15,
     }
     
-    # Parse insights from analysis data
-    if hasattr(analysis, 'insights_data') and analysis.insights_data:
-        try:
-            insights_data = analysis.insights_data
-            if isinstance(insights_data, dict):
-                # Extract insights from different categories
-                all_insights = []
-                for category in ['posting_pattern', 'content_type', 'topic_strategy', 'structure_formatting']:
-                    if category in insights_data and isinstance(insights_data[category], dict):
-                        category_insights = insights_data[category].get('insights', [])
-                        if isinstance(category_insights, list):
-                            all_insights.extend(category_insights)
-                
-                result['insights'] = all_insights[:3]  # Top 3 insights
-        except Exception as e:
-            logger.error(f"Error parsing insights: {e}")
-    
-    logger.info(f"Returning latest analysis for user {user.id}")
+    logger.info(f"Returning latest analysis for user {user.id} with {len(peers)} peers")
     return result
 
 @app.post("/api/analysis/run")

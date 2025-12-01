@@ -2,16 +2,24 @@
 import { PerformanceMetric, PeerAccount, Insight } from '@/types/dashboard';
 
 // Transform backend data to dashboard format
+// Transform backend data to dashboard format
 export function transformBackendAnalysis(backendData: any) {
+  // Log the structure for debugging
+  console.log('Backend data structure:', {
+    hasInsights: !!backendData.insights,
+    insightsType: Array.isArray(backendData.insights) ? 'array' : typeof backendData.insights,
+    insightsKeys: backendData.insights ? Object.keys(backendData.insights) : []
+  });
+  
   return {
-    id: backendData.id,
-    created_at: backendData.analyzed_at || backendData.created_at,
+    id: backendData.analysis_id || backendData.id,
+    created_at: backendData.created_at,
     x_score: calculateXScore(backendData),
     score_change: backendData.score_change || 0,
     percentile: backendData.percentile || 0,
     credits_used: backendData.credits_used || 15,
     performance_metrics: transformPerformanceMetrics(backendData),
-    top_peers: transformPeers(backendData.peers || []),
+    top_peers: transformPeers(backendData.peer_profiles || backendData.peers || []),
     insights: transformInsights(backendData.insights || []),
   };
 }
@@ -35,43 +43,73 @@ function calculateXScore(data: any): number {
 // Transform to radar chart format
 function transformPerformanceMetrics(data: any): PerformanceMetric[] {
   const profile = data.user_profile || {};
-  const peerAvg = data.peer_averages || {};
-
+  const peers = data.peer_profiles || data.peers || [];
+  
+  // Calculate peer averages
+  let peerAvgEngagement = 0;
+  let peerAvgGrowth = 0;
+  let peerAvgPosts = 0;
+  
+  if (peers.length > 0) {
+    peerAvgEngagement = peers.reduce((sum: number, p: any) => {
+      const grok = p.grok_profile || {};
+      const followers = p.basic_metrics?.followers_count || 1;
+      const likes = grok.average_likes_per_post || 0;
+      return sum + (likes / followers * 100);
+    }, 0) / peers.length;
+    
+    peerAvgGrowth = peers.reduce((sum: number, p: any) => {
+      const grok = p.grok_profile || {};
+      return sum + (grok.estimated_monthly_follower_growth_percent || 0);
+    }, 0) / peers.length;
+    
+    peerAvgPosts = peers.reduce((sum: number, p: any) => {
+      const grok = p.grok_profile || {};
+      return sum + (grok.posting_frequency_per_week || 0);
+    }, 0) / peers.length;
+  }
+  
+  // Fallback to API provided averages if no peers
+  const apiPeerAvg = data.peer_averages || {};
+  
+  const userEngagement = (profile.avg_engagement_rate || 0) * 100;
+  const peerEngagement = peerAvgEngagement || (apiPeerAvg.avg_engagement_rate || 0) * 100;
+  
   return [
     {
       metric: 'Engagement',
-      you: Math.round((profile.avg_engagement_rate || 0) * 100),
-      peers: Math.round((peerAvg.avg_engagement_rate || 0) * 100),
+      you: Math.round(userEngagement),
+      peers: Math.round(peerEngagement),
       fullMark: 100,
     },
     {
       metric: 'Growth',
       you: Math.min(Math.round(profile.growth_30d || 0), 100),
-      peers: Math.min(Math.round(peerAvg.growth_30d || 0), 100),
+      peers: Math.min(Math.round(peerAvgGrowth || apiPeerAvg.growth_30d || 0), 100),
       fullMark: 100,
     },
     {
       metric: 'Consistency',
       you: Math.min(Math.round((profile.posting_frequency_per_week || 0) * 7), 100),
-      peers: Math.min(Math.round((peerAvg.posting_frequency_per_week || 0) * 7), 100),
+      peers: Math.min(Math.round((peerAvgPosts || apiPeerAvg.posting_frequency_per_week || 0) * 7), 100),
       fullMark: 100,
     },
     {
       metric: 'Virality',
       you: Math.round(profile.viral_index || 65),
-      peers: Math.round(peerAvg.viral_index || 78),
+      peers: Math.round(apiPeerAvg.viral_index || 78),
       fullMark: 100,
     },
     {
       metric: 'Content Quality',
       you: Math.round(profile.content_quality_score || 75),
-      peers: Math.round(peerAvg.content_quality_score || 80),
+      peers: Math.round(apiPeerAvg.content_quality_score || 80),
       fullMark: 100,
     },
     {
       metric: 'Niche Authority',
       you: Math.round(profile.niche_authority_score || 70),
-      peers: Math.round(peerAvg.niche_authority_score || 80),
+      peers: Math.round(apiPeerAvg.niche_authority_score || 80),
       fullMark: 100,
     },
   ];
@@ -79,28 +117,71 @@ function transformPerformanceMetrics(data: any): PerformanceMetric[] {
 
 // Transform peers data
 function transformPeers(peers: any[]): PeerAccount[] {
-  return peers.slice(0, 4).map((peer, index) => ({
-    id: peer.id || `peer-${index}`,
-    name: peer.name || peer.handle?.replace('@', '') || 'Unknown',
-    handle: peer.handle || '@unknown',
-    avatar: getInitials(peer.name || peer.handle || 'U'),
-    score: Math.round(peer.match_score || peer.score || 85),
-    trend: `+${(peer.growth_rate || (Math.random() * 10 + 2)).toFixed(1)}%`,
-    followers_count: peer.followers_count || 0,
-    growth_rate: peer.growth_rate || 0,
-  }));
+  return peers.slice(0, 4).map((peer, index) => {
+    const grok = peer.grok_profile || {};
+    const basic = peer.basic_metrics || {};
+    
+    return {
+      id: peer.id || `peer-${index}`,
+      name: peer.name || peer.handle?.replace('@', '') || 'Unknown',
+      handle: peer.handle || '@unknown',
+      avatar: getInitials(peer.name || peer.handle || 'U'),
+      avatar_url: peer.profile_image || peer.profile_image_url || null,
+      score: Math.round(peer.match_score || grok.estimated_monthly_follower_growth_percent || 85),
+      trend: `+${(grok.estimated_monthly_follower_growth_percent || (Math.random() * 10 + 2)).toFixed(1)}%`,
+      followers_count: basic.followers_count || 0,
+      growth_rate: grok.estimated_monthly_follower_growth_percent || 0,
+      peer_insights: peer.peer_insights || undefined,  // ADD THIS LINE
+    };
+  });
 }
 
 // Transform insights from Grok
-function transformInsights(insights: any[]): Insight[] {
-  return insights.slice(0, 3).map((insight, index) => ({
-    title: insight.title || insight.category || `Insight ${index + 1}`,
-    finding: insight.finding || insight.observation || '',
-    impact: insight.impact || insight.expected_impact || 'Significant growth potential',
-    action: insight.action || insight.recommendation || '',
-    priority: insight.priority || index + 1,
-  }));
-}
+function transformInsights(insights: any): Insight[] {
+  // Handle case where insights might not be an array
+  if (!insights) {
+    return [];
+  }
+  
+  // If insights is an object with nested structure, extract the insights array
+  if (typeof insights === 'object' && !Array.isArray(insights)) {
+    // Check if there's an 'insights' property
+    if (Array.isArray(insights.insights)) {
+      insights = insights.insights;
+    } else {
+      // If it's a nested object structure, try to extract insights from categories
+      const extractedInsights: any[] = [];
+      const categories = ['posting_pattern', 'content_type', 'topic_strategy', 'structure_formatting'];
+      
+      for (const category of categories) {
+        if (insights[category] && Array.isArray(insights[category].insights)) {
+          extractedInsights.push(...insights[category].insights);
+        }
+      }
+      
+      if (extractedInsights.length > 0) {
+        insights = extractedInsights;
+      } else {
+        return [];
+      }
+    }
+  }
+
+    // Now insights should be an array
+    if (!Array.isArray(insights)) {
+      console.error('Insights is not an array:', insights);
+      return [];
+    }
+    
+    // Transform the insights array
+    return insights.slice(0, 3).map((insight, index) => ({
+      title: insight.title || insight.category || `Insight ${index + 1}`,
+      finding: insight.finding || insight.observation || insight.current_state || '',
+      impact: insight.impact || insight.gap_impact || insight.expected_result || 'Significant growth potential',
+      action: insight.action || insight.recommendation || '',
+      priority: insight.priority === 'critical' ? 1 : insight.priority === 'high' ? 2 : insight.priority === 'medium' ? 3 : (index + 1),
+    }));
+  }
 
 // Helper: Get initials from name
 function getInitials(name: string): string {
